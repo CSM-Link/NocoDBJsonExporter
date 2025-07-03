@@ -2,7 +2,7 @@
 
 本工具是 [nocodb: Open Source Airtable Alternative](https://github.com/nocodb/nocodb) 的一个外置工具，可以实现导出 NocoDB 的表格为 json 文件。
 
-本工具主要应用于==游戏开发领域==，旨在游戏开发中利用多维表格的优势进行填表工作，替代传统填表工具 Excel。
+本工具主要应用于=游戏开发领域=，旨在游戏开发中利用多维表格的优势进行填表工作，替代传统填表工具 Excel。
 
 本工具代码和原理都很简单，仅有 2 个 py 文件，可快速上手自定义表格内容和输出的 json 格式映射方式。
 
