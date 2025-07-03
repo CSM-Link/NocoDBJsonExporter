@@ -4,6 +4,7 @@ import os
 import re
 
 NUM_SUFFIX = "[num]"
+RECORD_LIMIT = 1000
 class SendError(Exception):
     pass
 
@@ -71,7 +72,7 @@ def main(host, token, table_id, view_id, output_file):
 
     # 3. 获取所有数据  
     try:
-        data_api = f"/api/v2/tables/{table_id}/records?viewId={view_id}"
+        data_api = f"/api/v2/tables/{table_id}/records?viewId={view_id}&limit={RECORD_LIMIT}"
         conn = http.client.HTTPConnection(host)
         conn.request("GET", data_api, headers=headers)
         res = conn.getresponse()
