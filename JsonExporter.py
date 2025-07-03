@@ -97,7 +97,15 @@ def main(host, token, table_id, view_id, output_file):
                 value = value[0]  # 只取第一个元素
             else:
                 value = None  # 空列表或非列表时返回 None
-
+        # 处理 JSON 类型
+        if uidt == "JSON":
+            if isinstance(value, str) and value:
+                try:
+                    return json.loads(value)
+                except Exception:
+                    return value  # 解析失败则返回原字符串
+            return value
+        
         if value is None:
             return None
         if title and title.endswith(NUM_SUFFIX):
