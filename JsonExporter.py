@@ -18,8 +18,10 @@ def main(host, token, table_id, view_id, output_file):
         os.makedirs(tmp_dir)
     step1_file = os.path.join(tmp_dir, "debug_step1_columns.json")
     step2_file = os.path.join(tmp_dir, "debug_step2_column_details.json")
+    step2_file_2 = os.path.join(tmp_dir, "debug_step2_column_maps.json")
     step3_file = os.path.join(tmp_dir, "debug_step3_data.json")
 
+    #####################################################################
     # 1. 获取所有 column meta 信息
     try:
         conn = http.client.HTTPConnection(host)
@@ -42,10 +44,13 @@ def main(host, token, table_id, view_id, output_file):
     except Exception as e:
         raise SendError(f"第一步：解析 Column Meta 信息失败: {e}")
     
+    #####################################################################
     # 2. 获取每个 column 的 title、uidt、dt
     column_detail_tpl = "/api/v2/meta/columns/{column_id}"
     column_map = {}
     column_details = []
+    all_col_json = {}
+    # 收集所有列详情
     for col_id in column_ids:
         try:
             path = column_detail_tpl.format(column_id=col_id)
@@ -53,23 +58,45 @@ def main(host, token, table_id, view_id, output_file):
             conn.request("GET", path, headers=headers)
             res = conn.getresponse()
             if res.status != 200:
-                    raise SendError(f"通信失败 {res.status} {res.reason} (column_id={col_id})")
+                raise SendError(f"通信失败 {res.status} {res.reason} (column_id={col_id})")
             col_data = res.read()
             conn.close()
 
             col_json = json.loads(col_data.decode("utf-8"))
-            column_details.append(col_json)  # 收集所有详情
+            column_details.append(col_json)
+            all_col_json[col_json.get("id")] = col_json
+        except Exception as e:
+            raise SendError(f"第二步： column {col_id} 返回数据失败: {e}")
+
+    # 构建 column_map，并处理 Lookup 关联类型
+    try:
+        for col_json in column_details:
             title = col_json.get("title")
             uidt = col_json.get("uidt")
             dt = col_json.get("dt")
+            lookup_relation_type = None
+            if uidt == "Lookup":
+                fk_relation_column_id = None
+                col_options = col_json.get("colOptions")
+                if col_options:
+                    fk_relation_column_id = col_options.get("fk_relation_column_id")
+                if fk_relation_column_id and fk_relation_column_id in all_col_json:
+                    related_col = all_col_json[fk_relation_column_id]
+                    related_col_options = related_col.get("colOptions")
+                    if related_col_options:
+                        lookup_relation_type = related_col_options.get("type")
             if title:
-                column_map[title] = {"uidt": uidt, "dt": dt}
-        except Exception as e:
-            raise SendError(f"第二步：解析 column {col_id} 返回数据失败: {e}")
+                column_map[title] = {"uidt": uidt, "dt": dt, "lookup_relation_type": lookup_relation_type}
+    except Exception as e:
+            raise SendError(f"第二步：解析 column 返回数据失败: {e}")
+    
     # 保存第二步所有详情
     with open(step2_file, "w", encoding="utf-8") as f:
         json.dump(column_details, f, ensure_ascii=False, indent=2)
-
+    with open(step2_file_2, "w", encoding="utf-8") as f:
+        json.dump(column_map, f, ensure_ascii=False, indent=2)
+    
+    #####################################################################
     # 3. 获取所有数据  
     try:
         data_api = f"/api/v2/tables/{table_id}/records?viewId={view_id}&limit={RECORD_LIMIT}"
@@ -89,14 +116,20 @@ def main(host, token, table_id, view_id, output_file):
     except Exception as e:
             raise SendError(f"第三步：获取表格数据异常: {e}")
     
+    #####################################################################
     # 4. 根据 column title 查找 uidt 和 dt，自定义处理（示例：类型转换）
-    def process_value(value, uidt, dt, title=None):
+    def process_value(value, uidt, dt, title=None,lookup_relation_type=None):
+        # 跳过 Links 字段
+        if uidt in ("Links","LinkToAnotherRecord"):
+            return None
         # 先处理 Lookup 类型
         if uidt == "Lookup":
-            if isinstance(value, (list, tuple)) and value:
-                value = value[0]  # 只取第一个元素
-            else:
-                value = None  # 空列表或非列表时返回 None
+            if lookup_relation_type in ("mm", "hm"):
+                # 关联类型为多对多或多对一，数据为数组，对每个元素递归处理
+                if isinstance(value, (list, tuple)):
+                    return [process_value(v, None, None,title) for v in value]
+                else:
+                    return None
         # 处理 JSON 类型
         if uidt == "JSON":
             if isinstance(value, str) and value:
@@ -145,18 +178,20 @@ def main(host, token, table_id, view_id, output_file):
             d = d[key]
         d[keys[-1]] = value
 
+    # 开始处理数据的转换
     processed_data = []
     for row in data_list:
         new_row = {}
         for k, v in row.items():
             if k == "Id":
                 continue  # 跳过 Id 字段
-            if v is None:
-                continue  # 跳过值为 null 的字段
+            if v  in (None ,[]):
+                continue  # 跳过空的字段
             col_info = column_map.get(k)
-            processed_v = process_value(v, col_info["uidt"], col_info["dt"], k) if col_info else v
-            if processed_v is None:
-                continue # 跳过值为 null 的字段
+            lookup_relation_type = col_info.get("lookup_relation_type") if col_info else None
+            processed_v = process_value(v, col_info["uidt"], col_info["dt"], k,lookup_relation_type) if col_info else v
+            if processed_v in (None ,[]):
+                continue # 跳过空的字段
             
             # 去掉 [num] 后缀
             if k.endswith(NUM_SUFFIX):
@@ -168,8 +203,10 @@ def main(host, token, table_id, view_id, output_file):
                 set_nested_value(new_row, keys, processed_v)
             else:
                 new_row[key_name] = processed_v
-        processed_data.append(new_row)
 
+        processed_data.append(new_row)
+    
+    #####################################################################
     # 5. 保存处理后的数据
     try:
         with open(output_file, "w", encoding="utf-8") as f:
